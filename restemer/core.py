@@ -2,17 +2,29 @@ import numpy as np
 
 
 def mono_to_float32(audio):
+    if audio is None:
+        return np.zeros(0, dtype=np.float32)
+
+    audio = np.asarray(audio)
     if audio.ndim == 2:
         audio = np.mean(audio, axis=1)
+
     audio = audio.astype(np.float32)
-    if np.max(np.abs(audio)) > 1.0:
-        audio = audio / np.max(np.abs(audio))
+    if audio.size == 0:
+        return audio
+
+    max_abs = np.max(np.abs(audio))
+    if not np.isfinite(max_abs) or max_abs == 0.0:
+        return np.zeros_like(audio, dtype=np.float32)
+
+    if max_abs > 1.0:
+        audio = audio / max_abs
     return audio
 
 
 def detect_onsets(signal, sample_rate, frame_size=2048, hop_size=512, threshold=0.12):
-    if len(signal) < frame_size:
-        return np.array([], dtype=int)
+    if signal.size < frame_size:
+        return np.array([], dtype=np.float32)
 
     energy = []
     for i in range(0, len(signal) - frame_size + 1, hop_size):
@@ -21,7 +33,7 @@ def detect_onsets(signal, sample_rate, frame_size=2048, hop_size=512, threshold=
         energy.append(rms)
 
     if len(energy) < 2:
-        return np.array([], dtype=int)
+        return np.array([], dtype=np.float32)
 
     energy = np.asarray(energy, dtype=np.float32)
     diff = np.diff(energy)
@@ -85,6 +97,13 @@ def build_extra_percussion(signal, sample_rate, onset_times, mode="beat"):
 
 
 def process_block(signal, sample_rate):
+    if signal is None:
+        return np.zeros(0, dtype=np.float32)
+
+    signal = np.asarray(signal)
+    if signal.size == 0:
+        return np.zeros(0, dtype=np.float32)
+
     signal = mono_to_float32(signal)
     onsets = detect_onsets(signal, sample_rate, threshold=0.1)
     extra = build_extra_percussion(signal, sample_rate, onsets, mode="beat")
