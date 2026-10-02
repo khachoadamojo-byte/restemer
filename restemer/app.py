@@ -27,47 +27,69 @@ class RestemerStream:
         self.save_output = save_output
         self.debug = debug
         self.output_frames = []
-        self.started_at = time.time()
+
+    def _safe_device(self, device):
+        if device is not None:
+            return device
+        return sd.default.device
 
     def process_callback(self, indata, outdata, frames, time_info, status):
         if status:
             if self.debug:
-                print(status)
+                print(f"Audio status: {status}")
 
-        block = indata[:, 0].astype(np.float32)
-        processed = process_block(block, self.sample_rate)
-        outdata[:, 0] = processed[:frames] * self.volume
+        if indata is None or indata.size == 0:
+            outdata.fill(0)
+            return
 
-        if self.save_output is not None:
-            self.output_frames.append(processed[:frames].copy())
+        try:
+            block = np.asarray(indata)
+            if block.ndim == 2 and block.shape[1] > 0:
+                block = block[:, 0]
+            if block.size == 0:
+                outdata.fill(0)
+                return
+
+            processed = process_block(block, self.sample_rate)
+            if processed.size == 0:
+                outdata.fill(0)
+                return
+
+            length = min(frames, processed.shape[0])
+            outdata[:length, 0] = processed[:length] * self.volume
+            outdata[length:, 0] = 0.0
+
+            if self.save_output is not None:
+                self.output_frames.append(processed[:length].copy())
+        except Exception as exc:
+            if self.debug:
+                print(f"Processing error: {exc}")
+            outdata.fill(0)
 
     def run(self, duration_seconds=None):
-        if duration_seconds is not None:
-            stop_after = duration_seconds
-            stream = sd.Stream(
-                samplerate=self.sample_rate,
-                blocksize=self.block_size,
-                device=(self.input_device, self.output_device),
-                channels=(1, 1),
-                dtype='float32',
-                callback=self.process_callback,
-            )
-            with stream:
-                sd.sleep(int(duration_seconds * 1000))
-        else:
-            stream = sd.Stream(
-                samplerate=self.sample_rate,
-                blocksize=self.block_size,
-                device=(self.input_device, self.output_device),
-                channels=(1, 1),
-                dtype='float32',
-                callback=self.process_callback,
-            )
-            with stream:
-                while True:
-                    time.sleep(0.1)
+        input_device = self._safe_device(self.input_device)
+        output_device = self._safe_device(self.output_device)
 
-        if self.save_output is not None:
+        try:
+            stream = sd.Stream(
+                samplerate=self.sample_rate,
+                blocksize=self.block_size,
+                device=(input_device, output_device),
+                channels=(1, 1),
+                dtype='float32',
+                callback=self.process_callback,
+            )
+
+            with stream:
+                if duration_seconds is not None:
+                    sd.sleep(int(duration_seconds * 1000))
+                else:
+                    while True:
+                        time.sleep(0.1)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to open audio stream: {exc}") from exc
+
+        if self.save_output is not None and self.output_frames:
             rendered = np.concatenate(self.output_frames)
             sf.write(self.save_output, rendered, self.sample_rate)
             print(f"Saved output to {self.save_output}")
@@ -92,18 +114,24 @@ def main():
 
     print("RESTEMER starting...")
     print("If you hear nothing, check your input and output devices.")
-    print("Use Python to list audio devices if needed.")
+    print("Use Python to list devices if needed.")
 
-    stream = RestemerStream(
-        sample_rate=args.sample_rate,
-        block_size=args.block_size,
-        input_device=args.input_device,
-        output_device=args.output_device,
-        volume=args.volume,
-        save_output=args.save_output,
-        debug=args.debug,
-    )
-    stream.run(duration_seconds=args.duration)
+    try:
+        stream = RestemerStream(
+            sample_rate=args.sample_rate,
+            block_size=args.block_size,
+            input_device=args.input_device,
+            output_device=args.output_device,
+            volume=args.volume,
+            save_output=args.save_output,
+            debug=args.debug,
+        )
+        stream.run(duration_seconds=args.duration)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}")
+        print("Try listing devices with:")
+        print("python -c \"import sounddevice as sd; print(sd.query_devices())\"")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
